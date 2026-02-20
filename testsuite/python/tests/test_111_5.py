@@ -58,6 +58,10 @@ def filter_state(pattern, all_nodes):
 params = [("+", "~"), ("+", "!"), ("&", "~"), ("&", "!")]
 
 
+@pytest.mark.xfail(
+    atf.get_version("bin/sinfo") < (25, 5),
+    reason="Ticket 21428: sinfo -t added support for state negation (~ and !) in 25.05.0",
+)
 @pytest.mark.parametrize("and_op, not_op", params)
 def test_state(and_op, not_op, set_states):
     """Verify sinfo -t filters correctly"""
