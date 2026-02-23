@@ -22883,6 +22883,7 @@ then :
 	  for d in $_x_ac_jwt_dirs; do
 	    test -f "$d/include/jwt.h" || continue
 	    for bit in $_x_ac_jwt_libs; do
+	      test -d "$d/$bit" || continue
 	      JWT_CPPFLAGS="-I$d/include"
 	      if test "$ac_with_rpath" = "yes"
 then :

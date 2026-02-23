@@ -51,6 +51,7 @@ AC_DEFUN([X_AC_JWT], [
 	  for d in $_x_ac_jwt_dirs; do
 	    test -f "$d/include/jwt.h" || continue
 	    for bit in $_x_ac_jwt_libs; do
+	      test -d "$d/$bit" || continue
 	      JWT_CPPFLAGS="-I$d/include"
 	      AS_IF([test "$ac_with_rpath" = "yes"],
 		    [JWT_LDFLAGS="-Wl,-rpath -Wl,$d/$bit -L$d/$bit -ljwt"],
