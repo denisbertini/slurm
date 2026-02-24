@@ -481,21 +481,22 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 	forward_data_msg_t req;
 	const char *node_aliases = NULL;
 	char *alias_addr = NULL;
-
+	slurm_addr_t tmp_addr;
+	
 	pmixp_debug_hang(0);
-
+	
 	slurm_msg_t_init(&msg);
 	slurm_msg_t_init(&resp);
-
+	
 	PMIXP_DEBUG("nodelist=%s, address=%s, len=%u", nodename, address, len);
 	req.address = (char *)address;
 	req.len = len;
 	/* there is not much we can do - just cast) */
 	req.data = (char*)data;
-
+	
 	msg.msg_type = REQUEST_FORWARD_DATA;
 	msg.data = &req;
-
+	
 	/* FIRST: Try to get address from SLURM_NODE_ALIASES (for dynamic nodes) */
 	node_aliases = getenv("SLURM_NODE_ALIASES");
 	if (node_aliases) {
@@ -504,33 +505,47 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 		if (alias_addr) {
 			PMIXP_DEBUG("Found address %s for dynamic node %s in aliases",
 				    alias_addr, nodename);
-			/* Use the address from aliases */
-			msg.address = slurm_parse_sockaddr(alias_addr, msg.flags);
+			
+			/* Initialize the address structure */
+			memset(&tmp_addr, 0, sizeof(slurm_addr_t));
+			
+			/* Parse the IP address string into sockaddr structure */
+			if (slurm_parse_sockaddr(alias_addr, &tmp_addr) < 0) {
+				PMIXP_ERROR("Failed to parse address %s for node %s",
+					    alias_addr, nodename);
+				xfree(alias_addr);
+				return SLURM_ERROR;
+			}
+			
+			/* Copy the parsed address to the message */
+			memcpy(&msg.address, &tmp_addr, sizeof(slurm_addr_t));
+			
 			xfree(alias_addr);
 			goto send_message;  /* Skip slurm.conf lookup */
 		}
 	}
-
+	
 	/* SECOND: Fall back to slurm.conf lookup (for static nodes) */
 	if (slurm_conf_get_addr(nodename, &msg.address, msg.flags) == SLURM_ERROR) {
 		PMIXP_ERROR("Can't find address for host %s (checked aliases and slurm.conf)",
 			    nodename);
 		return SLURM_ERROR;
 	}
-
+	
 send_message:
 	slurm_msg_set_r_uid(&msg, slurm_conf.slurmd_user_id);
-
+	
 	if (slurm_send_recv_node_msg(&msg, &resp, 0)) {
 		PMIXP_ERROR("failed to send to %s, errno=%d", nodename, errno);
 		return SLURM_ERROR;
 	}
-
+	
 	rc = slurm_get_return_code(resp.msg_type, resp.data);
 	slurm_free_msg_data(resp.msg_type, resp.data);
-
+	
 	return rc;
 }
+
 
 
 int pmixp_p2p_send(const char *nodename, const char *address, const char *data,
