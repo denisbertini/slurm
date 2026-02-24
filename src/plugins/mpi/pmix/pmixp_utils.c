@@ -586,7 +586,8 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 	slurm_msg_t msg, resp;
 	forward_data_msg_t req;
 	struct addrinfo hints, *res;
-	char addr_str[INET6_ADDRSTRLEN];
+	char port_str[16];
+	int port = 6817;  /* Default SlurmdPort */
 
 	pmixp_debug_hang(0);
 
@@ -595,28 +596,33 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 
 	PMIXP_ERROR("=== PMIX DEBUG === Entering _pmix_p2p_send_core for node=%s", nodename);
 	
-	/* Try DNS resolution as a fallback */
-	PMIXP_ERROR("=== PMIX DEBUG === Attempting DNS lookup for %s", nodename);
+	/* Try DNS resolution with explicit port */
+	PMIXP_ERROR("=== PMIX DEBUG === Attempting DNS lookup for %s with port %d", nodename, port);
 	
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_ADDRCONFIG;
 	
-	if (getaddrinfo(nodename, NULL, &hints, &res) == 0) {
+	snprintf(port_str, sizeof(port_str), "%d", port);
+	
+	if (getaddrinfo(nodename, port_str, &hints, &res) == 0) {
+		char addr_str[INET6_ADDRSTRLEN];
+		
 		/* Convert address to string for logging */
 		if (res->ai_family == AF_INET) {
 			struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
 			inet_ntop(AF_INET, &sin->sin_addr, addr_str, sizeof(addr_str));
+			PMIXP_ERROR("=== PMIX DEBUG === DNS lookup SUCCESS: %s -> %s:%d", 
+				    nodename, addr_str, ntohs(sin->sin_port));
 		} else if (res->ai_family == AF_INET6) {
 			struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)res->ai_addr;
 			inet_ntop(AF_INET6, &sin6->sin6_addr, addr_str, sizeof(addr_str));
-		} else {
-			strcpy(addr_str, "unknown");
+			PMIXP_ERROR("=== PMIX DEBUG === DNS lookup SUCCESS: %s -> [%s]:%d", 
+				    nodename, addr_str, ntohs(sin6->sin6_port));
 		}
 		
-		PMIXP_ERROR("=== PMIX DEBUG === DNS lookup SUCCESS: %s -> %s", nodename, addr_str);
-		
-		/* Copy the address to the message */
+		/* Copy the address to the message (includes port now!) */
 		memcpy(&msg.address, res->ai_addr, res->ai_addrlen);
 		freeaddrinfo(res);
 		
