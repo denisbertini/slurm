@@ -398,7 +398,7 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 	PMIXP_DEBUG("nodelist=%s, address=%s, len=%u", nodename, address, len);
 	req.address = (char *)address;
 	req.len = len;
-	/* there is not much we can do - just cast) */
+
 	req.data = (char*)data;
 
 	msg.msg_type = REQUEST_FORWARD_DATA;
