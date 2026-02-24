@@ -587,7 +587,7 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 	forward_data_msg_t req;
 	struct addrinfo hints, *res;
 	char port_str[16];
-	int port = 6818;  /* Default SlurmdPort */
+	int port = 6817;  /* Default SlurmdPort */
 
 	pmixp_debug_hang(0);
 
