@@ -580,91 +580,87 @@ static char* _get_addr_from_pmix_peer(const char *nodename)
 
 
 static int _pmix_p2p_send_core(const char *nodename, const char *address,
-			       const char *data, uint32_t len)
+                               const char *data, uint32_t len)
 {
-	int rc;
-	slurm_msg_t msg, resp;
-	forward_data_msg_t req;
-	struct addrinfo hints, *res;
-	char port_str[16];
-	int port = 6817;  /* Default SlurmdPort */
+    int rc;
+    slurm_msg_t msg, resp;
+    forward_data_msg_t req;
+    struct addrinfo hints, *res;
+    char port_str[16];
+    int using_dns = 0;
 
-	pmixp_debug_hang(0);
+    pmixp_debug_hang(0);
 
-	slurm_msg_t_init(&msg);
-	slurm_msg_t_init(&resp);
+    slurm_msg_t_init(&msg);
+    slurm_msg_t_init(&resp);
 
-	PMIXP_ERROR("=== PMIX DEBUG === Entering _pmix_p2p_send_core for node=%s", nodename);
-	
-	/* Try DNS resolution with explicit port */
-	PMIXP_ERROR("=== PMIX DEBUG === Attempting DNS lookup for %s with port %d", nodename, port);
-	
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_ADDRCONFIG;
-	
-	snprintf(port_str, sizeof(port_str), "%d", port);
-	
-	if (getaddrinfo(nodename, port_str, &hints, &res) == 0) {
-		char addr_str[INET6_ADDRSTRLEN];
-		
-		/* Convert address to string for logging */
-		if (res->ai_family == AF_INET) {
-			struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-			inet_ntop(AF_INET, &sin->sin_addr, addr_str, sizeof(addr_str));
-			PMIXP_ERROR("=== PMIX DEBUG === DNS lookup SUCCESS: %s -> %s:%d", 
-				    nodename, addr_str, ntohs(sin->sin_port));
-		} else if (res->ai_family == AF_INET6) {
-			struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)res->ai_addr;
-			inet_ntop(AF_INET6, &sin6->sin6_addr, addr_str, sizeof(addr_str));
-			PMIXP_ERROR("=== PMIX DEBUG === DNS lookup SUCCESS: %s -> [%s]:%d", 
-				    nodename, addr_str, ntohs(sin6->sin6_port));
-		}
-		
-		/* Copy the address to the message (includes port now!) */
-		memcpy(&msg.address, res->ai_addr, res->ai_addrlen);
-		freeaddrinfo(res);
-		
-		/* Skip slurm.conf lookup */
-		goto send_message;
-	} else {
-		PMIXP_ERROR("=== PMIX DEBUG === DNS lookup FAILED for %s", nodename);
-	}
-	
-	/* Fall back to slurm.conf lookup */
-	PMIXP_ERROR("=== PMIX DEBUG === Falling back to slurm.conf for %s", nodename);
-	if (slurm_conf_get_addr(nodename, &msg.address, msg.flags) == SLURM_ERROR) {
-		PMIXP_ERROR("=== PMIX DEBUG === slurm.conf lookup FAILED for %s", nodename);
-		PMIXP_ERROR("Can't find address for host %s (checked DNS and slurm.conf)",
-			    nodename);
-		return SLURM_ERROR;
-	} else {
-		PMIXP_ERROR("=== PMIX DEBUG === slurm.conf lookup SUCCESS for %s", nodename);
-	}
+    PMIXP_ERROR("=== PMIX DEBUG === Entering _pmix_p2p_send_core for node=%s", nodename);
+    
+    /* SPECIAL CASE: This appears to be MPI peer communication (no address provided) */
+    if (!address || !address[0]) {
+        PMIXP_ERROR("=== PMIX DEBUG === Detected MPI peer communication, using port 6818");
+        
+        /* Use DNS with port 6818 for MPI peer-to-peer */
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags = AI_ADDRCONFIG;
+        
+        snprintf(port_str, sizeof(port_str), "%d", 6818);
+        
+        if (getaddrinfo(nodename, port_str, &hints, &res) == 0) {
+            char addr_str[INET6_ADDRSTRLEN];
+            
+            if (res->ai_family == AF_INET) {
+                struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+                inet_ntop(AF_INET, &sin->sin_addr, addr_str, sizeof(addr_str));
+                PMIXP_ERROR("=== PMIX DEBUG === MPI peer lookup SUCCESS: %s -> %s:%d", 
+                            nodename, addr_str, ntohs(sin->sin_port));
+            }
+            
+            memcpy(&msg.address, res->ai_addr, res->ai_addrlen);
+            freeaddrinfo(res);
+            using_dns = 1;
+            goto send_message;
+        } else {
+            PMIXP_ERROR("=== PMIX DEBUG === MPI peer DNS lookup FAILED for %s", nodename);
+        }
+    }
+    
+    /* DEFAULT CASE: For everything else (controller health checks, etc.), use slurm.conf */
+    PMIXP_ERROR("=== PMIX DEBUG === Using standard slurm.conf lookup for %s", nodename);
+    if (slurm_conf_get_addr(nodename, &msg.address, msg.flags) == SLURM_ERROR) {
+        PMIXP_ERROR("=== PMIX DEBUG === slurm.conf lookup FAILED for %s", nodename);
+        PMIXP_ERROR("Can't find address for host %s", nodename);
+        return SLURM_ERROR;
+    } else {
+        PMIXP_ERROR("=== PMIX DEBUG === slurm.conf lookup SUCCESS for %s", nodename);
+    }
 
 send_message:
-	req.address = (char *)address;
-	req.len = len;
-	req.data = (char*)data;
+    req.address = (char *)address;
+    req.len = len;
+    req.data = (char*)data;
 
-	msg.msg_type = REQUEST_FORWARD_DATA;
-	msg.data = &req;
+    msg.msg_type = REQUEST_FORWARD_DATA;
+    msg.data = &req;
 
-	slurm_msg_set_r_uid(&msg, slurm_conf.slurmd_user_id);
+    slurm_msg_set_r_uid(&msg, slurm_conf.slurmd_user_id);
 
-	if (slurm_send_recv_node_msg(&msg, &resp, 0)) {
-		PMIXP_ERROR("failed to send to %s, errno=%d", nodename, errno);
-		return SLURM_ERROR;
-	}
+    if (slurm_send_recv_node_msg(&msg, &resp, 0)) {
+        PMIXP_ERROR("failed to send to %s, errno=%d", nodename, errno);
+        return SLURM_ERROR;
+    }
 
-	rc = slurm_get_return_code(resp.msg_type, resp.data);
-	slurm_free_msg_data(resp.msg_type, resp.data);
+    rc = slurm_get_return_code(resp.msg_type, resp.data);
+    slurm_free_msg_data(resp.msg_type, resp.data);
 
-	PMIXP_ERROR("=== PMIX DEBUG === Exiting _pmix_p2p_send_core for %s with rc=%d", 
-		    nodename, rc);
-	return rc;
+    PMIXP_ERROR("=== PMIX DEBUG === Exiting _pmix_p2p_send_core for %s with rc=%d", 
+                nodename, rc);
+    return rc;
 }
+
+
 
 
 int pmixp_p2p_send(const char *nodename, const char *address, const char *data,
