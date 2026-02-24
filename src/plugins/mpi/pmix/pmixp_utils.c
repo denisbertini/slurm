@@ -425,125 +425,6 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 }
 */
 
-/*
- * Get node address directly from PMIx peer info
- * This is more reliable than environment variables for dynamic nodes
- */
-static char* _get_addr_from_pmix_peer(const char *nodename)
-{
-	char *addr = NULL;
-	pmix_proc_t myproc;
-	pmix_proc_t target;
-	pmix_value_t *val = NULL;
-	pmix_info_t *info = NULL;
-	pmix_status_t rc;
-	char *tmp_str = NULL;
-	int timeout = 10;
-	
-	PMIXP_ERROR("=== PMIX DEBUG === _get_addr_from_pmix_peer: Looking up %s", nodename);
-	
-	/* Get our own proc info to get the namespace */
-	if (PMIx_Get_myproc(&myproc) != PMIX_SUCCESS) {
-		PMIXP_ERROR("=== PMIX DEBUG === PMIx_Get_myproc FAILED");
-		return NULL;
-	}
-	
-	PMIXP_ERROR("=== PMIX DEBUG === My proc: nspace=%s rank=%d", 
-		    myproc.nspace, myproc.rank);
-	
-	/* Set up target process (wildcard rank to get all) */
-	strncpy(target.nspace, myproc.nspace, PMIX_MAX_NSLEN);
-	target.rank = PMIX_RANK_WILDCARD;
-	
-	PMIXP_ERROR("=== PMIX DEBUG === Querying PMIx for peer info in nspace=%s", target.nspace);
-	
-	/* Set timeout for query */
-	PMIX_INFO_CREATE(info, 1);
-	PMIX_INFO_LOAD(&info[0], PMIX_TIMEOUT, &timeout, PMIX_INT);
-	
-	/* Query peer info from PMIx server */
-	rc = PMIx_Get(&target, PMIX_PEER_INFO, info, 1, &val);
-	PMIX_INFO_FREE(info, 1);
-	
-	if (rc != PMIX_SUCCESS) {
-		PMIXP_ERROR("=== PMIX DEBUG === PMIx_Get FAILED with rc=%d", rc);
-		return NULL;
-	}
-	
-	if (!val) {
-		PMIXP_ERROR("=== PMIX DEBUG === PMIx_Get returned NULL value");
-		return NULL;
-	}
-	
-	PMIXP_ERROR("=== PMIX DEBUG === PMIx_Get SUCCESS, value type=%d", val->type);
-	
-	/* Extract address based on PMIx value type */
-	if (val->type == PMIX_STRING) {
-		tmp_str = val->data.string;
-		PMIXP_ERROR("=== PMIX DEBUG === Got string value: '%s'", tmp_str);
-		
-		/* Parse out IP address - look for pattern after // */
-		if (tmp_str && strstr(tmp_str, "://")) {
-			char *start = strstr(tmp_str, "://") + 3;
-			char *end = strchr(start, ':');
-			if (end) {
-				*end = '\0';
-				addr = xstrdup(start);
-				PMIXP_ERROR("=== PMIX DEBUG === Parsed address (with port stripped): %s", addr);
-				*end = ':';  // restore for cleanliness
-			} else {
-				addr = xstrdup(start);
-				PMIXP_ERROR("=== PMIX DEBUG === Parsed address: %s", addr);
-			}
-		} else {
-			addr = xstrdup(tmp_str);
-			PMIXP_ERROR("=== PMIX DEBUG === Using raw string as address: %s", addr);
-		}
-	} 
-	else if (val->type == PMIX_DATA_ARRAY) {
-		pmix_data_array_t *arr = val->data.darray;
-		PMIXP_ERROR("=== PMIX DEBUG === Got data array: type=%d size=%zu", 
-			    arr->type, arr->size);
-		
-		if (arr->type == PMIX_STRING && arr->size > 0) {
-			char **str_arr = (char **)arr->array;
-			for (size_t i = 0; i < arr->size; i++) {
-				PMIXP_ERROR("=== PMIX DEBUG === Array[%zu]: '%s'", i, str_arr[i]);
-			}
-			if (str_arr[0]) {
-				/* Use first address */
-				if (strstr(str_arr[0], "://")) {
-					char *start = strstr(str_arr[0], "://") + 3;
-					char *end = strchr(start, ':');
-					if (end) {
-						*end = '\0';
-						addr = xstrdup(start);
-						*end = ':';
-					} else {
-						addr = xstrdup(start);
-					}
-				} else {
-					addr = xstrdup(str_arr[0]);
-				}
-				PMIXP_ERROR("=== PMIX DEBUG === Using first array element: %s", addr);
-			}
-		}
-	} else {
-		PMIXP_ERROR("=== PMIX DEBUG === Unhandled value type: %d", val->type);
-	}
-	
-	PMIX_VALUE_RELEASE(val);
-	
-	if (addr) {
-		PMIXP_ERROR("=== PMIX DEBUG === Successfully extracted address %s for node %s",
-			    addr, nodename);
-	} else {
-		PMIXP_ERROR("=== PMIX DEBUG === Could not extract address for node %s",
-			    nodename);
-	}
-	
-	return addr;
-}
 
 /*
  * Parse SLURM_NODE_ALIASES environment variable to find node address
@@ -592,6 +473,112 @@ static char* _lookup_in_node_aliases(const char *node_name, const char *aliases)
 }
 
 
+
+/*
+ * Get node address directly from PMIx peer info
+ * Compatible with PMIx 3.2.3
+ */
+static char* _get_addr_from_pmix_peer(const char *nodename)
+{
+	char *addr = NULL;
+	pmix_proc_t myproc;
+	pmix_proc_t target;
+	pmix_value_t *val = NULL;
+	pmix_info_t *info = NULL;
+	size_t ninfo = 0;
+	int rc;
+	char *tmp_str = NULL;
+	
+	PMIXP_ERROR("=== PMIX DEBUG === _get_addr_from_pmix_peer: Looking up %s", nodename);
+	
+	/* Initialize myproc */
+	memset(&myproc, 0, sizeof(pmix_proc_t));
+	memset(&target, 0, sizeof(pmix_proc_t));
+	
+	/* Get our own proc info - different API in PMIx 3 */
+	const char *nspace = NULL;
+	uint32_t rank;
+	
+	/* In PMIx 3, we need to get namespace from environment */
+	nspace = getenv("PMIX_NAMESPACE");
+	if (!nspace) {
+		PMIXP_ERROR("=== PMIX DEBUG === PMIX_NAMESPACE not set");
+		return NULL;
+	}
+	
+	/* Get rank from environment */
+	const char *rank_str = getenv("PMIX_RANK");
+	if (!rank_str) {
+		PMIXP_ERROR("=== PMIX DEBUG === PMIX_RANK not set");
+		return NULL;
+	}
+	rank = atoi(rank_str);
+	
+	PMIXP_ERROR("=== PMIX DEBUG === My proc: nspace=%s rank=%d", nspace, rank);
+	
+	/* Set up target process - use PMIX_PROC_INFO instead of PEER_INFO for PMIx 3 */
+	strncpy(target.nspace, nspace, PMIX_MAX_NSLEN);
+	target.rank = PMIX_RANK_WILDCARD;
+	
+	PMIXP_ERROR("=== PMIX DEBUG === Querying PMIx for proc info in nspace=%s", target.nspace);
+	
+	/* Query proc info from PMIx server - PMIX_PROC_INFO is the correct attribute for PMIx 3 */
+	rc = PMIx_Get(&target, PMIX_PROC_INFO, NULL, 0, &val);
+	
+	if (rc != PMIX_SUCCESS) {
+		PMIXP_ERROR("=== PMIX DEBUG === PMIx_Get FAILED with rc=%d", rc);
+		return NULL;
+	}
+	
+	if (!val) {
+		PMIXP_ERROR("=== PMIX DEBUG === PMIx_Get returned NULL value");
+		return NULL;
+	}
+	
+	PMIXP_ERROR("=== PMIX DEBUG === PMIx_Get SUCCESS, value type=%d", val->type);
+	
+	/* Extract address based on PMIx value type */
+	if (val->type == PMIX_STRING) {
+		tmp_str = val->data.string;
+		PMIXP_ERROR("=== PMIX DEBUG === Got string value: '%s'", tmp_str);
+		
+		/* Parse out IP address - look for hostname or IP */
+		addr = xstrdup(tmp_str);
+		PMIXP_ERROR("=== PMIX DEBUG === Using address: %s", addr);
+	} 
+	else if (val->type == PMIX_DATA_ARRAY) {
+		pmix_data_array_t *arr = val->data.darray;
+		PMIXP_ERROR("=== PMIX DEBUG === Got data array: type=%d size=%zu", 
+			    arr->type, arr->size);
+		
+		if (arr->type == PMIX_STRING && arr->size > 0) {
+			char **str_arr = (char **)arr->array;
+			for (size_t i = 0; i < arr->size; i++) {
+				PMIXP_ERROR("=== PMIX DEBUG === Array[%zu]: '%s'", i, str_arr[i]);
+			}
+			if (str_arr[0]) {
+				addr = xstrdup(str_arr[0]);
+				PMIXP_ERROR("=== PMIX DEBUG === Using first array element: %s", addr);
+			}
+		}
+	} else {
+		PMIXP_ERROR("=== PMIX DEBUG === Unhandled value type: %d", val->type);
+	}
+	
+	PMIX_VALUE_RELEASE(val);
+	
+	if (addr) {
+		PMIXP_ERROR("=== PMIX DEBUG === Successfully extracted address %s for node %s",
+			    addr, nodename);
+	} else {
+		PMIXP_ERROR("=== PMIX DEBUG === Could not extract address for node %s",
+			    nodename);
+	}
+	
+	return addr;
+}
+
+
 static int _pmix_p2p_send_core(const char *nodename, const char *address,
 			       const char *data, uint32_t len)
 {
@@ -600,7 +587,6 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 	forward_data_msg_t req;
 	char *resolved_addr = NULL;
 	slurm_addr_t tmp_addr;
-	int timeout = 10;
 
 	pmixp_debug_hang(0);
 
@@ -620,11 +606,14 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 	const char *nodelist = getenv("SLURM_JOB_NODELIST");
 	PMIXP_ERROR("=== PMIX DEBUG === SLURM_JOB_NODELIST = '%s'", 
 		    nodelist ? nodelist : "NULL");
+	
+	const char *pmix_nspace = getenv("PMIX_NAMESPACE");
+	PMIXP_ERROR("=== PMIX DEBUG === PMIX_NAMESPACE = '%s'", 
+		    pmix_nspace ? pmix_nspace : "NULL");
 
 	PMIXP_DEBUG("nodelist=%s, address=%s, len=%u", nodename, address, len);
 	req.address = (char *)address;
 	req.len = len;
-	/* there is not much we can do - just cast) */
 	req.data = (char*)data;
 
 	msg.msg_type = REQUEST_FORWARD_DATA;
@@ -654,20 +643,31 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 	/* METHOD 3: Finally, fall back to slurm.conf */
 	if (resolved_addr) {
 		PMIXP_ERROR("=== PMIX DEBUG === Using resolved address: %s", resolved_addr);
-		memset(&tmp_addr, 0, sizeof(slurm_addr_t));
-		if (slurm_parse_sockaddr(resolved_addr, &tmp_addr) < 0) {
+		
+		/* Parse the address string into a sockaddr structure */
+		/* Note: In some Slurm versions, we need to convert string to slurm_addr_t */
+		struct addrinfo hints, *res;
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_family = AF_UNSPEC;
+		hints.ai_socktype = SOCK_STREAM;
+		
+		if (getaddrinfo(resolved_addr, NULL, &hints, &res) == 0) {
+			memcpy(&tmp_addr, res->ai_addr, res->ai_addrlen);
+			memcpy(&msg.address, &tmp_addr, sizeof(slurm_addr_t));
+			freeaddrinfo(res);
+			PMIXP_ERROR("=== PMIX DEBUG === Successfully parsed address");
+		} else {
 			PMIXP_ERROR("=== PMIX DEBUG === Failed to parse address %s", resolved_addr);
 			xfree(resolved_addr);
 			return SLURM_ERROR;
 		}
-		memcpy(&msg.address, &tmp_addr, sizeof(slurm_addr_t));
 		xfree(resolved_addr);
 	} else {
 		/* Fall back to slurm.conf lookup */
 		PMIXP_ERROR("=== PMIX DEBUG === Falling back to slurm.conf for %s", nodename);
 		if (slurm_conf_get_addr(nodename, &msg.address, msg.flags) == SLURM_ERROR) {
 			PMIXP_ERROR("=== PMIX DEBUG === slurm.conf lookup FAILED for %s", nodename);
-			PMIXP_ERROR("Can't find address for host %s (checked aliases and slurm.conf)",
+			PMIXP_ERROR("Can't find address for host %s (checked PMIx, aliases, and slurm.conf)",
 				    nodename);
 			return SLURM_ERROR;
 		} else {
@@ -689,6 +689,7 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 		    nodename, rc);
 	return rc;
 }
+
 
 
 int pmixp_p2p_send(const char *nodename, const char *address, const char *data,
