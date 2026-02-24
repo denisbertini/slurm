@@ -382,6 +382,7 @@ int pmixp_stepd_send(const char *nodelist, const char *address,
 	return rc;
 }
 
+/* original
 static int _pmix_p2p_send_core(const char *nodename, const char *address,
 			       const char *data, uint32_t len)
 {
@@ -422,6 +423,115 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 
 	return rc;
 }
+*/
+
+
+/*
+ * Parse SLURM_NODE_ALIASES environment variable to find node address
+ * Format: node1,ip1,node2,ip2,...
+ * Returns xstrdup'd address string or NULL if not found.
+ * Caller must xfree() the result.
+ */
+static char* _lookup_in_node_aliases(const char *node_name, const char *aliases)
+{
+	char *addr = NULL;
+	char *alias_copy = NULL;
+	char *saveptr = NULL;
+	char *token;
+	char *current_node = NULL;
+	char *current_addr = NULL;
+	int pair_count = 0;
+	
+	if (!node_name || !aliases)
+		return NULL;
+	
+	PMIXP_DEBUG("Looking up %s in SLURM_NODE_ALIASES", node_name);
+	
+	alias_copy = xstrdup(aliases);
+	if (!alias_copy)
+		return NULL;
+	
+	token = strtok_r(alias_copy, ",", &saveptr);
+	while (token) {
+		if (pair_count % 2 == 0) {
+			current_node = token;
+		} else {
+			current_addr = token;
+			if (current_node && strcmp(current_node, node_name) == 0) {
+				addr = xstrdup(current_addr);
+				PMIXP_DEBUG("Found address %s for node %s in aliases",
+					    addr, node_name);
+				break;
+			}
+		}
+		pair_count++;
+		token = strtok_r(NULL, ",", &saveptr);
+	}
+	
+	xfree(alias_copy);
+	return addr;
+}
+
+
+static int _pmix_p2p_send_core(const char *nodename, const char *address,
+			       const char *data, uint32_t len)
+{
+	int rc;
+	slurm_msg_t msg, resp;
+	forward_data_msg_t req;
+	const char *node_aliases = NULL;
+	char *alias_addr = NULL;
+
+	pmixp_debug_hang(0);
+
+	slurm_msg_t_init(&msg);
+	slurm_msg_t_init(&resp);
+
+	PMIXP_DEBUG("nodelist=%s, address=%s, len=%u", nodename, address, len);
+	req.address = (char *)address;
+	req.len = len;
+	/* there is not much we can do - just cast) */
+	req.data = (char*)data;
+
+	msg.msg_type = REQUEST_FORWARD_DATA;
+	msg.data = &req;
+
+	/* FIRST: Try to get address from SLURM_NODE_ALIASES (for dynamic nodes) */
+	node_aliases = getenv("SLURM_NODE_ALIASES");
+	if (node_aliases) {
+		PMIXP_DEBUG("SLURM_NODE_ALIASES=%s", node_aliases);
+		alias_addr = _lookup_in_node_aliases(nodename, node_aliases);
+		if (alias_addr) {
+			PMIXP_DEBUG("Found address %s for dynamic node %s in aliases",
+				    alias_addr, nodename);
+			/* Use the address from aliases */
+			msg.address = slurm_parse_sockaddr(alias_addr, msg.flags);
+			xfree(alias_addr);
+			goto send_message;  /* Skip slurm.conf lookup */
+		}
+	}
+
+	/* SECOND: Fall back to slurm.conf lookup (for static nodes) */
+	if (slurm_conf_get_addr(nodename, &msg.address, msg.flags) == SLURM_ERROR) {
+		PMIXP_ERROR("Can't find address for host %s (checked aliases and slurm.conf)",
+			    nodename);
+		return SLURM_ERROR;
+	}
+
+send_message:
+	slurm_msg_set_r_uid(&msg, slurm_conf.slurmd_user_id);
+
+	if (slurm_send_recv_node_msg(&msg, &resp, 0)) {
+		PMIXP_ERROR("failed to send to %s, errno=%d", nodename, errno);
+		return SLURM_ERROR;
+	}
+
+	rc = slurm_get_return_code(resp.msg_type, resp.data);
+	slurm_free_msg_data(resp.msg_type, resp.data);
+
+	return rc;
+}
+
 
 int pmixp_p2p_send(const char *nodename, const char *address, const char *data,
 		   uint32_t len, unsigned int start_delay,
