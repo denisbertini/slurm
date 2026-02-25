@@ -619,7 +619,6 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 	slurm_msg_t_init(&msg);
 	slurm_msg_t_init(&resp);
 
-	_debug_dump_address(nodename,address); 
 	PMIXP_DEBUG("nodelist=%s, address=%s, len=%u", nodename, address, len);
 	req.address = (char *)address;
 	req.len = len;
@@ -648,9 +647,6 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
 
 	return rc;
 }
-
-
-
 
 
 
