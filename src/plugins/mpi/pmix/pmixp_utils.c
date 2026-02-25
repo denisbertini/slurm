@@ -579,6 +579,33 @@ static char* _get_addr_from_pmix_peer(const char *nodename)
 }
 
 
+static void _debug_dump_address(const char *nodename, const char *address)
+{
+    char filename[256];
+    snprintf(filename, sizeof(filename), "/tmp/pmix_debug_%s.txt", nodename);
+    
+    FILE *fp = fopen(filename, "a");
+    if (!fp) return;
+    
+    fprintf(fp, "=== Time: %ld ===\n", time(NULL));
+    fprintf(fp, "nodename: %s\n", nodename ? nodename : "NULL");
+    fprintf(fp, "address: '%s'\n", address ? address : "NULL");
+    
+    if (address) {
+        fprintf(fp, "address length: %zu\n", strlen(address));
+        fprintf(fp, "address hex dump:\n");
+        for (int i = 0; i < 64 && i < strlen(address); i++) {
+            fprintf(fp, "  [%d] = 0x%02x (%c)\n", 
+                    i, (unsigned char)address[i],
+                    isprint(address[i]) ? address[i] : '.');
+        }
+    }
+    fprintf(fp, "\n");
+    fclose(fp);
+}
+
+
+
 static int _pmix_p2p_send_core(const char *nodename, const char *address,
                                const char *data, uint32_t len)
 {
@@ -594,26 +621,8 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
     slurm_msg_t_init(&msg);
     slurm_msg_t_init(&resp);
 
+   _debug_dump_address(nodename, address);    
     PMIXP_ERROR("=== PMIX DEBUG === Entering _pmix_p2p_send_core for node=%s", nodename);
-
-
-    PMIXP_ERROR("=== PMIX DEBUG === Entering _pmix_p2p_send_core for node=%s", nodename);
-    
-    /* CRITICAL DEBUG - See what address really contains */
-    PMIXP_ERROR("=== PMIX DEBUG === address parameter = '%s'", address ? address : "NULL");
-    if (address) {
-        PMIXP_ERROR("=== PMIX DEBUG === address length = %zu", strlen(address));
-        /* Print first 16 bytes as hex to see if it's binary data */
-        PMIXP_ERROR("=== PMIX DEBUG === address hex dump:");
-        for (int i = 0; i < 16 && i < strlen(address); i++) {
-            PMIXP_ERROR("  address[%d] = 0x%02x ('%c')", 
-                        i, (unsigned char)address[i], 
-                        isprint(address[i]) ? address[i] : '.');
-        }
-    }
-    
-
-    
     
     /* SPECIAL CASE: This appears to be MPI peer communication (no address provided) */
     if (!address || !address[0]) {
