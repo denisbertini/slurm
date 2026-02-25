@@ -595,6 +595,25 @@ static int _pmix_p2p_send_core(const char *nodename, const char *address,
     slurm_msg_t_init(&resp);
 
     PMIXP_ERROR("=== PMIX DEBUG === Entering _pmix_p2p_send_core for node=%s", nodename);
+
+
+    PMIXP_ERROR("=== PMIX DEBUG === Entering _pmix_p2p_send_core for node=%s", nodename);
+    
+    /* CRITICAL DEBUG - See what address really contains */
+    PMIXP_ERROR("=== PMIX DEBUG === address parameter = '%s'", address ? address : "NULL");
+    if (address) {
+        PMIXP_ERROR("=== PMIX DEBUG === address length = %zu", strlen(address));
+        /* Print first 16 bytes as hex to see if it's binary data */
+        PMIXP_ERROR("=== PMIX DEBUG === address hex dump:");
+        for (int i = 0; i < 16 && i < strlen(address); i++) {
+            PMIXP_ERROR("  address[%d] = 0x%02x ('%c')", 
+                        i, (unsigned char)address[i], 
+                        isprint(address[i]) ? address[i] : '.');
+        }
+    }
+    
+
+    
     
     /* SPECIAL CASE: This appears to be MPI peer communication (no address provided) */
     if (!address || !address[0]) {
